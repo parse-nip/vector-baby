@@ -70,7 +70,8 @@ async function loadInfo() {
     ['inverted lists', fmt(d.nlist)],
     ['dimensions', d.d],
     ['PQ bytes/vec', d.bytes_per_vec],
-    ['raw size saved', (d.n*d.d*4/1e9).toFixed(0)+' GB → '+(d.n*d.bytes_per_vec/1e9).toFixed(1)+' GB'],
+    ['raw → compressed', (d.n*d.d*4/1e9).toFixed(0)+' GB → '+(d.n*d.bytes_per_vec/1e9).toFixed(1)+' GB'],
+    ['nprobe / rerank', d.nprobe+' / '+fmt(d.rerank)],
   ].map(([l,v]) => `<div class="stat"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('');
   document.getElementById('nprobe').value = d.nprobe;
   document.getElementById('k').value = d.k;

@@ -3,7 +3,7 @@
 
 use crate::dataset::{make_queries, Dataset, QuerySet};
 use crate::index::IvfPq;
-use crate::QUERY_NOISE;
+use crate::{rerank, QUERY_NOISE};
 use std::sync::Arc;
 use std::time::Instant;
 use tiny_http::{Header, Method, Response, Server};
@@ -16,6 +16,7 @@ pub struct AppState {
     pub queries: QuerySet,
     pub nprobe: usize,
     pub k: usize,
+    pub rerank: usize,
 }
 
 fn parse_query(url: &str) -> std::collections::HashMap<String, String> {
@@ -66,8 +67,8 @@ pub fn serve(state: AppState, port: u16) {
             if url.starts_with("/api/info") {
                 let meta = &state.index.meta;
                 let body = format!(
-                    "{{\"n\":{},\"nlist\":{},\"d\":{},\"m\":{},\"ksub\":{},\"bytes_per_vec\":{},\"nq\":{},\"nprobe\":{},\"k\":{}}}",
-                    meta.n, meta.nlist, meta.d, meta.pq.m, meta.pq.ksub, m, state.queries.nq(), state.nprobe, state.k
+                    "{{\"n\":{},\"nlist\":{},\"d\":{},\"m\":{},\"ksub\":{},\"bytes_per_vec\":{},\"nq\":{},\"nprobe\":{},\"k\":{},\"rerank\":{}}}",
+                    meta.n, meta.nlist, meta.d, meta.pq.m, meta.pq.ksub, m, state.queries.nq(), state.nprobe, state.k, state.rerank
                 );
                 let _ = request.respond(Response::from_string(body).with_header(json_header()));
                 continue;
@@ -93,7 +94,8 @@ pub fn serve(state: AppState, port: u16) {
                 let target = state.queries.targets[j];
 
                 let t0 = Instant::now();
-                let res = state.index.search(q, nprobe, k);
+                let shortlist = state.index.search(q, nprobe, state.rerank);
+                let res = rerank(&state.ds, q, &shortlist, k);
                 let micros = t0.elapsed().as_micros();
 
                 let hit = res.iter().any(|&(id, _)| id as u64 == target);

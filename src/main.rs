@@ -277,6 +277,7 @@ fn main() {
             let nq: usize = get(&m, "nq", 256usize);
             let nprobe: usize = get(&m, "nprobe", 16usize);
             let k: usize = get(&m, "k", 10usize);
+            let rr: usize = get(&m, "rerank", 16384usize);
             let ds = Dataset::new(idx.meta.dataset.clone());
             let queries = make_queries(&ds, idx.meta.n, nq, QUERY_NOISE, qseed(idx.meta.dataset.seed));
             println!("warming up code store...");
@@ -287,6 +288,7 @@ fn main() {
                 queries,
                 nprobe,
                 k,
+                rerank: rr,
             };
             serve(state, port);
         }
