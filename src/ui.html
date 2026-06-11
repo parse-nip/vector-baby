@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>vector-baby — billion-scale vector search</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #0b0e14; color: #e6e6e6; padding: 28px;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #8a94a6; margin-bottom: 20px; font-size: 13px; }
+  .stats { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+  .stat { background: #121722; border: 1px solid #1f2733; border-radius: 10px; padding: 12px 16px; min-width: 130px; }
+  .stat .label { color: #8a94a6; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  .stat .value { font-size: 20px; margin-top: 4px; color: #7ee787; }
+  .controls { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
+  button {
+    background: #2563eb; color: white; border: 0; border-radius: 8px;
+    padding: 10px 18px; font-size: 14px; cursor: pointer; font-family: inherit;
+  }
+  button:hover { background: #1d4ed8; }
+  input { background: #121722; border: 1px solid #1f2733; color: #e6e6e6; border-radius: 8px; padding: 9px 12px; width: 90px; font-family: inherit; }
+  label { color: #8a94a6; font-size: 13px; }
+  .latency { font-size: 46px; font-weight: 700; }
+  .latency .unit { font-size: 18px; color: #8a94a6; }
+  .ok { color: #7ee787; } .bad { color: #ff7b72; }
+  .panel { background: #121722; border: 1px solid #1f2733; border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #1f2733; font-size: 13px; }
+  th { color: #8a94a6; font-weight: 500; }
+  tr.hit td { color: #7ee787; }
+  .badge { padding: 2px 8px; border-radius: 6px; font-size: 11px; }
+  .badge.hit { background: #16331f; color: #7ee787; }
+</style>
+</head>
+<body>
+  <h1>vector-baby</h1>
+  <div class="sub">custom IVF-PQ vector database &middot; disk-backed &middot; approximate nearest neighbor search</div>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="controls">
+    <button id="run">Run random query</button>
+    <label>query #</label><input id="j" type="number" min="0" value="0" />
+    <label>nprobe</label><input id="nprobe" type="number" min="1" value="16" />
+    <label>k</label><input id="k" type="number" min="1" value="10" />
+  </div>
+
+  <div class="panel">
+    <div class="label" style="color:#8a94a6;font-size:11px;text-transform:uppercase;">query latency</div>
+    <div class="latency" id="latency">—</div>
+    <div id="verdict" style="margin-top:6px;font-size:14px;"></div>
+  </div>
+
+  <div class="panel">
+    <div style="color:#8a94a6;font-size:13px;">Top-k results (the planted true neighbor is highlighted)</div>
+    <table id="results"><thead><tr><th>rank</th><th>vector id</th><th>distance</th><th></th></tr></thead><tbody></tbody></table>
+  </div>
+
+<script>
+async function loadInfo() {
+  const r = await fetch('/api/info'); const d = await r.json();
+  const fmt = n => n.toLocaleString();
+  document.getElementById('stats').innerHTML = [
+    ['vectors', fmt(d.n)],
+    ['inverted lists', fmt(d.nlist)],
+    ['dimensions', d.d],
+    ['PQ bytes/vec', d.bytes_per_vec],
+    ['raw size saved', (d.n*d.d*4/1e9).toFixed(0)+' GB → '+(d.n*d.bytes_per_vec/1e9).toFixed(1)+' GB'],
+  ].map(([l,v]) => `<div class="stat"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('');
+  document.getElementById('nprobe').value = d.nprobe;
+  document.getElementById('k').value = d.k;
+}
+
+async function runQuery(useJ) {
+  const nprobe = document.getElementById('nprobe').value;
+  const k = document.getElementById('k').value;
+  let url = `/api/search?nprobe=${nprobe}&k=${k}`;
+  if (useJ) url += `&j=${document.getElementById('j').value}`;
+  const r = await fetch(url); const d = await r.json();
+  document.getElementById('j').value = d.query_index;
+  const lat = document.getElementById('latency');
+  const under = d.latency_ms < 100;
+  lat.innerHTML = `<span class="${under?'ok':'bad'}">${d.latency_ms.toFixed(2)}</span> <span class="unit">ms</span>`;
+  document.getElementById('verdict').innerHTML = d.hit
+    ? `<span class="ok">&#10003; found the true nearest neighbor (vector #${d.target_id}) in ${d.latency_ms.toFixed(2)} ms &mdash; ${under?'under':'over'} 100ms target</span>`
+    : `<span class="bad">true neighbor #${d.target_id} not in top-${k}</span>`;
+  const tb = document.querySelector('#results tbody');
+  tb.innerHTML = d.results.map(x =>
+    `<tr class="${x.is_target?'hit':''}"><td>${x.rank}</td><td>${x.id.toLocaleString()}</td><td>${x.dist.toFixed(4)}</td><td>${x.is_target?'<span class="badge hit">true NN</span>':''}</td></tr>`
+  ).join('');
+}
+
+document.getElementById('run').onclick = () => runQuery(false);
+document.getElementById('j').addEventListener('keydown', e => { if (e.key==='Enter') runQuery(true); });
+loadInfo();
+</script>
+</body>
+</html>

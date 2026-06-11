@@ -1,0 +1,4 @@
+[build]
+# Use all available CPU features (AVX-512 on this host) for autovectorized
+# distance kernels. This is the single biggest knob for build/query throughput.
+rustflags = ["-C", "target-cpu=native"]
