@@ -6,7 +6,7 @@ use vector_baby::dataset::{make_queries, Dataset, DatasetSpec};
 use vector_baby::index::{BuildParams, IvfPq};
 use vector_baby::math::{argmin_blk, to_blocks};
 use vector_baby::server::{AppState, serve};
-use vector_baby::{brute_force_all, qseed, QUERY_NOISE};
+use vector_baby::{brute_force_all, qseed, rerank, QUERY_NOISE};
 use rayon::prelude::*;
 
 fn parse_args(args: &[String]) -> HashMap<String, String> {
@@ -85,6 +85,7 @@ fn main() {
             let nq: usize = get(&m, "nq", 1000usize);
             let nprobe: usize = get(&m, "nprobe", 16usize);
             let k: usize = get(&m, "k", 10usize);
+            let rr: usize = get(&m, "rerank", 256usize);
             let do_warmup: bool = get(&m, "warmup", true);
             let ds = Dataset::new(idx.meta.dataset.clone());
             let queries = make_queries(&ds, idx.meta.n, nq, QUERY_NOISE, qseed(idx.meta.dataset.seed));
@@ -107,12 +108,14 @@ fn main() {
             let mut hits = 0usize;
             // a few warm iterations
             for j in 0..nq.min(20) {
-                let _ = idx.search(queries.query(j), nprobe, k);
+                let s = idx.search(queries.query(j), nprobe, rr);
+                let _ = rerank(&ds, queries.query(j), &s, k);
             }
             for j in 0..nq {
                 let q = queries.query(j);
                 let t = Instant::now();
-                let res = idx.search(q, nprobe, k);
+                let shortlist = idx.search(q, nprobe, rr);
+                let res = rerank(&ds, q, &shortlist, k);
                 lat.push(t.elapsed().as_secs_f64() * 1000.0);
                 if res.iter().any(|&(id, _)| id as u64 == queries.targets[j]) {
                     hits += 1;
@@ -120,7 +123,7 @@ fn main() {
             }
             lat.sort_by(|a, b| a.partial_cmp(b).unwrap());
             let mean = lat.iter().sum::<f64>() / lat.len() as f64;
-            println!("--- query benchmark (nq={}, nprobe={}, k={}) ---", nq, nprobe, k);
+            println!("--- query benchmark (nq={}, nprobe={}, k={}, rerank={}) ---", nq, nprobe, k, rr);
             println!("latency ms: mean={:.2}  p50={:.2}  p90={:.2}  p99={:.2}  max={:.2}",
                 mean, percentile(&lat, 50.0), percentile(&lat, 90.0), percentile(&lat, 99.0), percentile(&lat, 100.0));
             println!("throughput: {:.0} queries/sec (single-query latency)", 1000.0 / mean);
@@ -134,6 +137,7 @@ fn main() {
             let nq: usize = get(&m, "nq", 1000usize);
             let nprobe: usize = get(&m, "nprobe", 16usize);
             let k: usize = get(&m, "k", 10usize);
+            let rr: usize = get(&m, "rerank", 256usize);
             let ds = Dataset::new(idx.meta.dataset.clone());
             let queries = make_queries(&ds, idx.meta.n, nq, QUERY_NOISE, qseed(idx.meta.dataset.seed));
 
@@ -145,7 +149,8 @@ fn main() {
             let mut recall_sum = 0.0f64;
             let mut planted = 0usize;
             for j in 0..nq {
-                let res = idx.search(queries.query(j), nprobe, k);
+                let shortlist = idx.search(queries.query(j), nprobe, rr);
+                let res = rerank(&ds, queries.query(j), &shortlist, k);
                 let got: std::collections::HashSet<u32> = res.iter().map(|&(id, _)| id).collect();
                 let truth_ids: std::collections::HashSet<u32> =
                     truth[j].iter().map(|&(_, id)| id).collect();
@@ -155,7 +160,7 @@ fn main() {
                     planted += 1;
                 }
             }
-            println!("--- recall vs exact brute force (nq={}, nprobe={}, k={}) ---", nq, nprobe, k);
+            println!("--- recall vs exact brute force (nq={}, nprobe={}, k={}, rerank={}) ---", nq, nprobe, k, rr);
             println!("recall@{} = {:.2}%", k, 100.0 * recall_sum / nq as f64);
             println!("planted recall@{} = {:.2}%", k, 100.0 * planted as f64 / nq as f64);
         }

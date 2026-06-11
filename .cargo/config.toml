@@ -1,10 +1,11 @@
 [build]
-# This host has AVX-512 (see /proc/cpuinfo) but LLVM's `target-cpu=native`
-# detection does NOT enable avx512 for this hypervisor's generic CPU model,
-# so we enable the relevant feature flags explicitly. Without this the
-# `#[cfg(target_feature = "avx512f")]` distance kernels compile out and the
-# slow scalar fallback runs (~10x slower builds).
+# Distance kernels target AVX2 + FMA (stable on this Rust toolchain; AVX-512
+# intrinsics are still unstable on stable Rust, so we don't use them). We
+# enable the features explicitly because LLVM's `target-cpu=native` on this
+# hypervisor does not reliably turn them on — without this the
+# `#[cfg(target_feature = "avx2")]` kernels compile out and a ~10x slower
+# scalar fallback runs.
 rustflags = [
     "-C", "target-cpu=native",
-    "-C", "target-feature=+avx512f,+avx512bw,+avx512dq,+avx512vl,+fma,+avx2,+bmi2",
+    "-C", "target-feature=+avx2,+fma,+bmi2",
 ]

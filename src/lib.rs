@@ -18,6 +18,30 @@ pub fn qseed(seed: u64) -> u64 {
     seed ^ 0x9999_1234_ABCD_0001
 }
 
+/// Exact re-ranking of an IVF-PQ candidate shortlist.
+///
+/// IVF-PQ produces an approximate shortlist fast; we then recompute the *exact*
+/// L2 distance for those few candidates and keep the true top-k. In a
+/// production system the candidate vectors would be random-read from disk; here
+/// the dataset is reproducible by id (`ds.gen`), which is the equivalent lookup
+/// (we cannot store 512 GB of raw vectors for a billion points). The expensive
+/// billion-scale filtering still happens in the real index scan — re-ranking
+/// only reorders a few hundred candidates.
+pub fn rerank(ds: &Dataset, query: &[f32], cand: &[(u32, f32)], k: usize) -> Vec<(u32, f32)> {
+    let d = ds.d();
+    let mut tmp = vec![0.0f32; d];
+    let mut top = TopK::new(k);
+    for &(id, _) in cand {
+        ds.gen(id as u64, &mut tmp);
+        let dist = l2_sq(query, &tmp);
+        top.push(dist, id);
+    }
+    top.into_sorted()
+        .into_iter()
+        .map(|(dd, id)| (id, dd))
+        .collect()
+}
+
 /// Exact top-k for every query in a single streaming pass over the dataset.
 /// Used to measure true recall at scales where brute force is feasible.
 pub fn brute_force_all(
