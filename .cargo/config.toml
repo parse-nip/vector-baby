@@ -1,4 +1,10 @@
 [build]
-# Use all available CPU features (AVX-512 on this host) for autovectorized
-# distance kernels. This is the single biggest knob for build/query throughput.
-rustflags = ["-C", "target-cpu=native"]
+# This host has AVX-512 (see /proc/cpuinfo) but LLVM's `target-cpu=native`
+# detection does NOT enable avx512 for this hypervisor's generic CPU model,
+# so we enable the relevant feature flags explicitly. Without this the
+# `#[cfg(target_feature = "avx512f")]` distance kernels compile out and the
+# slow scalar fallback runs (~10x slower builds).
+rustflags = [
+    "-C", "target-cpu=native",
+    "-C", "target-feature=+avx512f,+avx512bw,+avx512dq,+avx512vl,+fma,+avx2,+bmi2",
+]

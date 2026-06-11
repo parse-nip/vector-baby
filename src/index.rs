@@ -13,7 +13,7 @@
 
 use crate::dataset::{Dataset, DatasetSpec};
 use crate::kmeans::kmeans;
-use crate::math::{argmin_blk, l2_sq, to_block16};
+use crate::math::{argmin_blk, l2_sq, to_blocks};
 use crate::pq::{adc_distance, Pq, PqParams};
 use crate::topk::TopK;
 use memmap2::Mmap;
@@ -100,7 +100,7 @@ impl IvfPq {
         ds.gen_block(0, n_train, &mut sample);
 
         let centroids = kmeans(&sample, n_train, d, bp.nlist, bp.coarse_iters, spec.seed ^ 0xC0FFEE);
-        let cent_b = to_block16(&centroids, bp.nlist, d); // block16 layout, fast assignment
+        let cent_b = to_blocks(&centroids, bp.nlist, d); // block16 layout, fast assignment
         progress(format!("coarse k-means done ({} lists) in {:.1}s", bp.nlist, t0.elapsed().as_secs_f64()));
 
         // residuals of the sample for PQ training

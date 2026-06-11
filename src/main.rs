@@ -1,10 +1,13 @@
 use std::collections::HashMap;
+use std::hint::black_box;
 use std::path::Path;
 use std::time::Instant;
 use vector_baby::dataset::{make_queries, Dataset, DatasetSpec};
 use vector_baby::index::{BuildParams, IvfPq};
+use vector_baby::math::{argmin_blk, to_blocks};
 use vector_baby::server::{AppState, serve};
 use vector_baby::{brute_force_all, qseed, QUERY_NOISE};
+use rayon::prelude::*;
 
 fn parse_args(args: &[String]) -> HashMap<String, String> {
     let mut m = HashMap::new();
@@ -155,6 +158,113 @@ fn main() {
             println!("--- recall vs exact brute force (nq={}, nprobe={}, k={}) ---", nq, nprobe, k);
             println!("recall@{} = {:.2}%", k, 100.0 * recall_sum / nq as f64);
             println!("planted recall@{} = {:.2}%", k, 100.0 * planted as f64 / nq as f64);
+        }
+        "diag" => {
+            // Isolate each build stage to attribute the bottleneck.
+            let idx = IvfPq::open(dir).expect("open index (build a small one first)");
+            let d = idx.meta.d;
+            let nlist = idx.meta.nlist;
+            let mcode = idx.meta.pq.m;
+            let n: u64 = get(&m, "n", 4_000_000u64);
+            let batch: usize = get(&m, "batch", 1_000_000usize);
+            let ds = Dataset::new(idx.meta.dataset.clone());
+            let cent_b = to_blocks(&idx.centroids, nlist, d);
+            let threads = rayon::current_num_threads();
+            println!("threads={} d={} nlist={} m={}", threads, d, nlist, mcode);
+
+            // --- (A) single-thread raw kernel throughput ---
+            let q = 8192usize;
+            let mut qbuf = vec![0.0f32; q * d];
+            ds.gen_block(0, q, &mut qbuf);
+            let reps = 256usize;
+            let t = Instant::now();
+            let mut acc = 0u64;
+            for _ in 0..reps {
+                for j in 0..q {
+                    let (bi, _) = argmin_blk(&qbuf[j * d..j * d + d], &cent_b, nlist, d);
+                    acc = acc.wrapping_add(bi as u64);
+                }
+            }
+            black_box(acc);
+            let secs = t.elapsed().as_secs_f64();
+            let assigns = (q * reps) as f64;
+            let gflops = assigns * nlist as f64 * d as f64 * 2.0 / secs / 1e9;
+            println!(
+                "[A] kernel 1-thread: {:.2}M assign/s, {:.1} GFLOP/s  (1 assign = {} dist of dim {})",
+                assigns / secs / 1e6,
+                gflops,
+                nlist,
+                d
+            );
+
+            // --- (B) generation only (parallel) ---
+            let mut vecs = vec![0.0f32; batch * d];
+            let mut done = 0u64;
+            let t = Instant::now();
+            let mut cksum = 0.0f32;
+            while done < n {
+                let cur = ((n - done) as usize).min(batch);
+                ds.gen_block(done, cur, &mut vecs[..cur * d]);
+                cksum += vecs[0];
+                done += cur as u64;
+            }
+            black_box(cksum);
+            let t_gen = t.elapsed().as_secs_f64();
+            println!("[B] generate only:        {:.3}M vec/s", n as f64 / t_gen / 1e6);
+
+            // --- (C) generate + assign (parallel) ---
+            let mut assign = vec![0u32; batch];
+            let mut done = 0u64;
+            let t = Instant::now();
+            while done < n {
+                let cur = ((n - done) as usize).min(batch);
+                ds.gen_block(done, cur, &mut vecs[..cur * d]);
+                assign[..cur].par_iter_mut().enumerate().for_each(|(j, a)| {
+                    *a = argmin_blk(&vecs[j * d..j * d + d], &cent_b, nlist, d).0;
+                });
+                done += cur as u64;
+            }
+            black_box(assign[0]);
+            let t_assign = t.elapsed().as_secs_f64();
+            println!("[C] generate + assign:    {:.3}M vec/s", n as f64 / t_assign / 1e6);
+
+            // --- (D) generate + assign + residual + encode (full pass) ---
+            let mut codes = vec![0u8; batch * mcode];
+            let mut done = 0u64;
+            let t = Instant::now();
+            while done < n {
+                let cur = ((n - done) as usize).min(batch);
+                ds.gen_block(done, cur, &mut vecs[..cur * d]);
+                assign[..cur].par_iter_mut().enumerate().for_each(|(j, a)| {
+                    *a = argmin_blk(&vecs[j * d..j * d + d], &cent_b, nlist, d).0;
+                });
+                codes[..cur * mcode].par_chunks_mut(mcode).enumerate().for_each(|(j, code)| {
+                    let c = assign[j] as usize;
+                    let cc = &idx.centroids[c * d..c * d + d];
+                    let mut res = [0.0f32; 4096];
+                    for k in 0..d {
+                        res[k] = vecs[j * d + k] - cc[k];
+                    }
+                    idx.pq.encode_into(&res[..d], code);
+                });
+                done += cur as u64;
+            }
+            black_box(codes[0]);
+            let t_full = t.elapsed().as_secs_f64();
+            println!("[D] gen+assign+encode:    {:.3}M vec/s", n as f64 / t_full / 1e6);
+
+            // --- attribution + 1B projection ---
+            let per = |secs: f64| secs / n as f64;
+            let gen_s = per(t_gen);
+            let assign_s = (per(t_assign) - per(t_gen)).max(0.0);
+            let encode_s = (per(t_full) - per(t_assign)).max(0.0);
+            println!("--- per-vector cost (parallel, {} threads) ---", threads);
+            println!("  generate: {:.1} ns   assign: {:.1} ns   encode: {:.1} ns",
+                gen_s * 1e9, assign_s * 1e9, encode_s * 1e9);
+            println!("--- projected time to build 1,000,000,000 vectors ---");
+            println!("  assign pass (gen+assign):        {:.1} min", per(t_assign) * 1e9 / 60.0);
+            println!("  encode pass (gen+encode approx): {:.1} min", (gen_s + encode_s) * 1e9 / 60.0);
+            println!("  TOTAL (two passes):              {:.1} min", (per(t_assign) + gen_s + encode_s) * 1e9 / 60.0);
         }
         "serve" => {
             let idx = IvfPq::open(dir).expect("open index");

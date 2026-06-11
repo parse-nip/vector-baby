@@ -5,7 +5,7 @@
 //! table of size `m * ksub` reduces each code's distance to `m` table adds.
 
 use crate::kmeans::kmeans;
-use crate::math::{argmin_blk, to_block16};
+use crate::math::{argmin_blk, to_blocks};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +27,7 @@ fn build_codebook_b(codebook: &[f32], m: usize, ksub: usize, dsub: usize) -> Vec
     let mut out = vec![0.0f32; m * stride];
     for s in 0..m {
         let src = &codebook[s * stride..(s + 1) * stride];
-        let b = to_block16(src, ksub, dsub); // ksub x dsub -> block16
+        let b = to_blocks(src, ksub, dsub); // ksub x dsub -> block16
         out[s * stride..(s + 1) * stride].copy_from_slice(&b);
     }
     out
