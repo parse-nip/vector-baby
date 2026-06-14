@@ -60,7 +60,7 @@ async function run(){
   const q=document.getElementById('q').value.trim();if(!q)return;
   document.getElementById('meta').textContent='searching...';
   const r=await fetch('/search?k=24&q='+encodeURIComponent(q));const d=await r.json();
-  document.getElementById('meta').innerHTML=`"${d.query}" &mdash; <b>${d.total_ms.toFixed(1)} ms</b> total (text encode ${d.encode_ms.toFixed(1)} ms + vector search ${d.search_ms.toFixed(2)} ms over ${d.n.toLocaleString()} apes)`;
+  document.getElementById('meta').innerHTML=`"${d.query}" &mdash; <b>${d.total_ms.toFixed(1)} ms</b> total (text encode ${d.encode_ms.toFixed(1)} ms + vector search ${d.search_ms.toFixed(2)} ms over ${d.n.toLocaleString()} NFTs)`;
   document.getElementById('grid').innerHTML=d.results.map(x=>{
     const img=x.image||('/img/'+x.token+'.jpg');
     const label=x.collection?x.collection:('#'+x.token);

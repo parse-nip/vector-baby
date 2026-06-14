@@ -75,3 +75,21 @@ re-ranking. Single binary `vbaby` with subcommands `build`, `bench`, `recall`,
   and is the only thing near the 100 ms budget — it would be a few ms on a GPU.
   `scripts/eval_query.py` renders a montage of top results for fast visual
   iteration; `scripts/find_gold.py` is local pixel-based ground truth.
+
+### NFT crawler (OpenSea → CLIP → index)
+- `scripts/nft_crawler.py` is a real crawler: producer thread paginates OpenSea
+  collections (rate-limited, 429-aware), fetcher threads download CDN images +
+  dedup (by `contract:token` and image sha256), main loop batches CLIP
+  `encode_image` and appends `data/crawl/{embeddings.f32,docs.jsonl,meta.json}`.
+  Resumable via `data/crawl/state.json` + `seen.json` (use `--reset` to start
+  fresh). Discovery is built on OpenSea's index (CDN images) rather than raw
+  chain+IPFS — IPFS gateways rate-limit hard, OpenSea already normalized it.
+- **Gotcha**: OpenSea's WAF returns 403 to the default Python user-agent — the
+  crawler sets a browser-like `User-Agent` on every request. Get a free instant
+  key via `curl -X POST https://api.opensea.io/api/v2/auth/keys` (60 reads/min,
+  30-day expiry); cached to `data/crawl/api_key.json` (gitignored) or set
+  `OPENSEA_API_KEY`. Don't recreate keys (3/hour/IP limit).
+- Serve the crawl: `vbaby serve-nft --dir data/crawl --port 8091` +
+  `nft_search_app.py --docs data/crawl/docs.jsonl --model ViT-B-32 --baseline-text ""`
+  (disable the BAYC-specific baseline for multi-collection corpora; the UI then
+  renders remote CDN images and collection labels from the docstore).
