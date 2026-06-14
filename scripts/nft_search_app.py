@@ -16,6 +16,9 @@ import torch, open_clip
 ARGS = None
 MODEL = None
 TOKENIZER = None
+BASELINE = None  # canonical "a bored ape" embedding, subtracted to isolate the
+                 # distinctive part of a query (helps fine attributes like fur color)
+BASELINE_ALPHA = 0.5
 
 PAGE = """<!DOCTYPE html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1">
@@ -64,13 +67,20 @@ document.getElementById('q').addEventListener('keydown',e=>{if(e.key==='Enter')r
 </script></body></html>"""
 
 
+def _embed(text):
+    with torch.no_grad():
+        f = MODEL.encode_text(TOKENIZER([text]))
+        f = f / f.norm(dim=-1, keepdim=True)
+    return f[0].cpu().numpy().astype("float32")
+
+
 def encode_text(q):
     t = time.time()
-    with torch.no_grad():
-        toks = TOKENIZER([q])
-        f = MODEL.encode_text(toks)
-        f = f / f.norm(dim=-1, keepdim=True)
-    return f[0].cpu().numpy().astype("float32").tolist(), (time.time() - t) * 1000.0
+    f = _embed(q)
+    if BASELINE is not None:
+        f = f - BASELINE_ALPHA * BASELINE
+        f = f / (float((f * f).sum()) ** 0.5 + 1e-9)
+    return f.tolist(), (time.time() - t) * 1000.0
 
 
 def vbaby_search(vec, k):
@@ -132,7 +142,7 @@ NUM_VECTORS = 0
 
 
 def main():
-    global ARGS, MODEL, TOKENIZER, NUM_VECTORS
+    global ARGS, MODEL, TOKENIZER, NUM_VECTORS, BASELINE
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--vbaby-port", type=int, default=8091)
@@ -144,6 +154,7 @@ def main():
     MODEL, _, _ = open_clip.create_model_and_transforms(ARGS.model, pretrained=ARGS.pretrained)
     MODEL.eval()
     TOKENIZER = open_clip.get_tokenizer(ARGS.model)
+    BASELINE = _embed("a bored ape")
     try:
         info = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{ARGS.vbaby_port}/api/info", timeout=10).read())
         NUM_VECTORS = info.get("n", 0)
