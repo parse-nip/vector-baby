@@ -1,4 +1,5 @@
 pub mod dataset;
+pub mod flat;
 pub mod index;
 pub mod kmeans;
 pub mod math;

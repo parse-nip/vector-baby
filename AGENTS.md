@@ -43,3 +43,26 @@ re-ranking. Single binary `vbaby` with subcommands `build`, `bench`, `recall`,
 - `bench`/`serve` call `warmup()` to page the mmap'd code store into the page
   cache; the 8 GB code store fits in the 15 GB RAM, so warm queries are
   RAM-speed. Cold (first) queries hit disk and are slower.
+
+### NFT semantic search POC (BAYC)
+- Goal: text query ("golden fur ape") → matching Bored Ape images, <100 ms.
+- Two-service architecture (kept separate because CLIP is Python):
+  1. **Rust** `vbaby serve-nft --dir data/bayc --port 8091` — loads the
+     `FlatIndex` (`src/flat.rs`): exact cosine search over the CLIP image
+     embeddings. Exposes `POST /api/search_vector` ({"vector":[...],"k":N}).
+     Flat/exact is the right choice at 10k (perfect recall, ~1 ms); IVF-PQ is
+     only needed at the billion scale.
+  2. **Python** `scripts/nft_search_app.py --port 8090 --vbaby-port 8091` —
+     loads CLIP, serves the web UI + ape thumbnails, encodes the text query,
+     and forwards the vector to the Rust service.
+- CLIP embeddings are L2-normalized, so cosine ranking == L2 ranking; the
+  existing `l2_sq` kernel is reused unchanged (cosine reported as 1 - l2/2).
+- Offline embedding: `scripts/embed_bayc.py` reads HF parquet (BAYC mirror
+  `huggingnft/boredapeyachtclub`), writes `data/bayc/{embeddings.f32,meta.json}`
+  and `images/<token>.jpg`. **Model choice matters for fine attributes**:
+  ViT-B-32 misses rare traits like solid-gold fur; ViT-L-14 is much better
+  (set `--model ViT-L-14 --pretrained laion2b_s32b_b82k`). The text encoder in
+  the serving app MUST use the same model as the image embeddings.
+- Python deps are a POC add-on (not in the Rust build / update script); install
+  per `scripts/requirements.txt` (use `pip install --break-system-packages`,
+  no venv available on this VM).

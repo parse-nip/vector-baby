@@ -3,9 +3,10 @@ use std::hint::black_box;
 use std::path::Path;
 use std::time::Instant;
 use vector_baby::dataset::{make_queries, Dataset, DatasetSpec};
+use vector_baby::flat::FlatIndex;
 use vector_baby::index::{BuildParams, IvfPq};
 use vector_baby::math::{argmin_blk, to_blocks};
-use vector_baby::server::{AppState, serve};
+use vector_baby::server::{serve, serve_nft, AppState};
 use vector_baby::{brute_force_all, qseed, rerank, QUERY_NOISE};
 use rayon::prelude::*;
 
@@ -291,6 +292,11 @@ fn main() {
                 rerank: rr,
             };
             serve(state, port);
+        }
+        "serve-nft" => {
+            let port: u16 = get(&m, "port", 8091u16);
+            let index = FlatIndex::open(dir).expect("open NFT index (run embed_bayc.py first)");
+            serve_nft(index, port);
         }
         other => {
             eprintln!("unknown command: {}", other);

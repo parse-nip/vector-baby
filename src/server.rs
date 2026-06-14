@@ -2,6 +2,7 @@
 //! no build step: one embedded HTML page that calls a tiny JSON API.
 
 use crate::dataset::{make_queries, Dataset, QuerySet};
+use crate::flat::FlatIndex;
 use crate::index::IvfPq;
 use crate::{rerank, QUERY_NOISE};
 use std::sync::Arc;
@@ -115,6 +116,99 @@ pub fn serve(state: AppState, port: u16) {
                 let body = format!(
                     "{{\"query_index\":{},\"target_id\":{},\"latency_ms\":{:.3},\"nprobe\":{},\"k\":{},\"hit\":{},\"results\":[{}]}}",
                     j, target, micros as f64 / 1000.0, nprobe, k, hit, items
+                );
+                let _ = request.respond(Response::from_string(body).with_header(json_header()));
+                continue;
+            }
+            let _ = request.respond(Response::from_string("not found").with_status_code(404));
+        }));
+    }
+    for h in handles {
+        let _ = h.join();
+    }
+}
+
+/// Raw-vector search service for the NFT (flat/CLIP) index. The Python CLIP
+/// service encodes a text query into a vector and POSTs it here.
+pub fn serve_nft(index: FlatIndex, port: u16) {
+    let addr = format!("0.0.0.0:{}", port);
+    let server = Arc::new(Server::http(&addr).expect("bind"));
+    let index = Arc::new(index);
+    println!(
+        "vector-baby NFT search on http://{} ({} vectors, d={}, model={})",
+        addr,
+        index.n(),
+        index.d,
+        index.model
+    );
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let server = server.clone();
+        let index = index.clone();
+        handles.push(std::thread::spawn(move || loop {
+            let mut request = match server.recv() {
+                Ok(r) => r,
+                Err(_) => break,
+            };
+            let url = request.url().to_string();
+            if url.starts_with("/api/info") {
+                let body = format!(
+                    "{{\"n\":{},\"d\":{},\"model\":\"{}\"}}",
+                    index.n(),
+                    index.d,
+                    index.model
+                );
+                let _ = request.respond(Response::from_string(body).with_header(json_header()));
+                continue;
+            }
+            if url.starts_with("/api/search_vector") && *request.method() == Method::Post {
+                let mut body = String::new();
+                let _ = request.as_reader().read_to_string(&mut body);
+                let parsed: Result<serde_json::Value, _> = serde_json::from_str(&body);
+                let v = match parsed {
+                    Ok(v) => v,
+                    Err(_) => {
+                        let _ = request.respond(Response::from_string("bad json").with_status_code(400));
+                        continue;
+                    }
+                };
+                let k = v.get("k").and_then(|x| x.as_u64()).unwrap_or(24) as usize;
+                let query: Vec<f32> = v
+                    .get("vector")
+                    .and_then(|x| x.as_array())
+                    .map(|a| a.iter().filter_map(|e| e.as_f64().map(|f| f as f32)).collect())
+                    .unwrap_or_default();
+                if query.len() != index.d {
+                    let _ = request.respond(
+                        Response::from_string(format!(
+                            "{{\"error\":\"expected vector of dim {}, got {}\"}}",
+                            index.d,
+                            query.len()
+                        ))
+                        .with_header(json_header())
+                        .with_status_code(400),
+                    );
+                    continue;
+                }
+                let t0 = Instant::now();
+                let res = index.search(&query, k);
+                let micros = t0.elapsed().as_micros();
+                let mut items = String::new();
+                for (rank, (tok, score)) in res.iter().enumerate() {
+                    if rank > 0 {
+                        items.push(',');
+                    }
+                    items.push_str(&format!(
+                        "{{\"rank\":{},\"token\":{},\"score\":{:.4}}}",
+                        rank + 1,
+                        tok,
+                        score
+                    ));
+                }
+                let body = format!(
+                    "{{\"latency_ms\":{:.3},\"results\":[{}]}}",
+                    micros as f64 / 1000.0,
+                    items
                 );
                 let _ = request.respond(Response::from_string(body).with_header(json_header()));
                 continue;

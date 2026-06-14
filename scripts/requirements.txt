@@ -1,0 +1,9 @@
+# NFT semantic-search POC (CLIP embedding + text encoding).
+# Install CPU torch from the PyTorch CPU index, then the rest:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r scripts/requirements.txt
+# (On this VM, venv is unavailable; use `pip install --break-system-packages`.)
+open_clip_torch
+pillow
+pyarrow
+numpy
