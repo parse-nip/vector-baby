@@ -44,7 +44,7 @@ button:hover{background:#1d4ed8}
 .card .score{color:#7ee787}
 </style></head><body>
 <h1>NFT semantic search</h1>
-<div class=sub>type a concept &middot; CLIP text&rarr;image &middot; exact cosine search over 10,000 Bored Apes via vector-baby</div>
+<div class=sub>type a concept &middot; CLIP text&rarr;image &middot; neural search over a freshly-crawled multi-collection NFT index via vector-baby</div>
 <div class=bar>
   <input id=q placeholder="golden fur ape" autofocus>
   <button onclick=run()>Search</button>
