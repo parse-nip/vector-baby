@@ -66,3 +66,12 @@ re-ranking. Single binary `vbaby` with subcommands `build`, `bench`, `recall`,
 - Python deps are a POC add-on (not in the Rust build / update script); install
   per `scripts/requirements.txt` (use `pip install --break-system-packages`,
   no venv available on this VM).
+- The app subtracts a canonical baseline embedding (`emb("a bored ape")*0.5`)
+  from each query before searching; this cancels the generic "ape" signal and
+  sharply improves rare fine-attribute queries (e.g. "golden fur" stops
+  returning gold-*chain* apes). Verified not to hurt clean queries.
+- **Latency breakdown** (CPU-only box): the vector search itself is ~2 ms; the
+  CLIP **text encoder dominates** (~60–90 ms for ViT-L-14, ~10 ms for ViT-B-32)
+  and is the only thing near the 100 ms budget — it would be a few ms on a GPU.
+  `scripts/eval_query.py` renders a montage of top results for fast visual
+  iteration; `scripts/find_gold.py` is local pixel-based ground truth.
