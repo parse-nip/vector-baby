@@ -16,6 +16,7 @@ import torch, open_clip
 ARGS = None
 MODEL = None
 TOKENIZER = None
+DOCS = None      # optional docstore (list of crawled NFT metadata, row-aligned)
 BASELINE = None  # canonical "a bored ape" embedding, subtracted to isolate the
                  # distinctive part of a query (helps fine attributes like fur color)
 BASELINE_ALPHA = 0.5
@@ -52,7 +53,7 @@ button:hover{background:#1d4ed8}
 <div class=meta id=meta></div>
 <div class=grid id=grid></div>
 <script>
-const examples=["golden fur ape","zombie ape","laser eyes","ape wearing a captain's hat","ape smoking a cigarette","ape with a king's crown","robot ape","ape wearing 3D glasses","rainbow colored ape","ape in a suit and tie"];
+const examples=["a cute penguin","pixel art","a girl with pink hair","a robot","laser eyes","a skull","golden fur","a wizard hat","sunglasses","a colorful psychedelic creature","a samurai","a zombie"];
 const chips=document.getElementById('chips');
 examples.forEach(e=>{const c=document.createElement('span');c.className='chip';c.textContent=e;c.onclick=()=>{document.getElementById('q').value=e;run()};chips.appendChild(c)});
 async function run(){
@@ -60,8 +61,11 @@ async function run(){
   document.getElementById('meta').textContent='searching...';
   const r=await fetch('/search?k=24&q='+encodeURIComponent(q));const d=await r.json();
   document.getElementById('meta').innerHTML=`"${d.query}" &mdash; <b>${d.total_ms.toFixed(1)} ms</b> total (text encode ${d.encode_ms.toFixed(1)} ms + vector search ${d.search_ms.toFixed(2)} ms over ${d.n.toLocaleString()} apes)`;
-  document.getElementById('grid').innerHTML=d.results.map(x=>
-    `<div class=card><img loading=lazy src="/img/${x.token}.jpg"><div class=info><span>#${x.token}</span><span class=score>${x.score.toFixed(3)}</span></div></div>`).join('');
+  document.getElementById('grid').innerHTML=d.results.map(x=>{
+    const img=x.image||('/img/'+x.token+'.jpg');
+    const label=x.collection?x.collection:('#'+x.token);
+    return `<div class=card><img loading=lazy src="${img}"><div class=info><span title="${label}">${label.length>16?label.slice(0,16)+'…':label}</span><span class=score>${x.score.toFixed(3)}</span></div></div>`;
+  }).join('');
 }
 document.getElementById('q').addEventListener('keydown',e=>{if(e.key==='Enter')run()});
 </script></body></html>"""
@@ -126,13 +130,20 @@ class Handler(BaseHTTPRequestHandler):
             vec, enc_ms = encode_text(q)
             sr = vbaby_search(vec, k)
             total = (time.time() - t0) * 1000.0
+            results = sr.get("results", [])
+            if DOCS is not None:
+                for r in results:
+                    doc = DOCS[r["token"]] if r["token"] < len(DOCS) else {}
+                    r["image"] = doc.get("image_url")
+                    r["name"] = doc.get("name")
+                    r["collection"] = doc.get("collection")
             out = {
                 "query": q,
                 "encode_ms": enc_ms,
                 "search_ms": sr.get("latency_ms", 0.0),
                 "total_ms": total,
                 "n": NUM_VECTORS,
-                "results": sr.get("results", []),
+                "results": results,
             }
             return self._send(200, json.dumps(out))
         return self._send(404, b"not found", "text/plain")
@@ -142,19 +153,24 @@ NUM_VECTORS = 0
 
 
 def main():
-    global ARGS, MODEL, TOKENIZER, NUM_VECTORS, BASELINE
+    global ARGS, MODEL, TOKENIZER, NUM_VECTORS, BASELINE, DOCS
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--vbaby-port", type=int, default=8091)
     ap.add_argument("--images", default="data/bayc/images")
     ap.add_argument("--model", default="ViT-B-32")
     ap.add_argument("--pretrained", default="laion2b_s34b_b79k")
+    ap.add_argument("--docs", default="", help="optional docs.jsonl docstore (crawler mode, remote images)")
+    ap.add_argument("--baseline-text", default="a bored ape", help="prompt subtracted to isolate fine attributes; empty to disable")
     ARGS = ap.parse_args()
+    if ARGS.docs and os.path.isfile(ARGS.docs):
+        DOCS = [json.loads(l) for l in open(ARGS.docs)]
+        print(f"loaded docstore: {len(DOCS)} NFTs")
     torch.set_num_threads(2)
     MODEL, _, _ = open_clip.create_model_and_transforms(ARGS.model, pretrained=ARGS.pretrained)
     MODEL.eval()
     TOKENIZER = open_clip.get_tokenizer(ARGS.model)
-    BASELINE = _embed("a bored ape")
+    BASELINE = _embed(ARGS.baseline_text) if ARGS.baseline_text else None
     try:
         info = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{ARGS.vbaby_port}/api/info", timeout=10).read())
         NUM_VECTORS = info.get("n", 0)
