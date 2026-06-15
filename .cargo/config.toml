@@ -1,0 +1,11 @@
+[build]
+# Distance kernels target AVX2 + FMA (stable on this Rust toolchain; AVX-512
+# intrinsics are still unstable on stable Rust, so we don't use them). We
+# enable the features explicitly because LLVM's `target-cpu=native` on this
+# hypervisor does not reliably turn them on — without this the
+# `#[cfg(target_feature = "avx2")]` kernels compile out and a ~10x slower
+# scalar fallback runs.
+rustflags = [
+    "-C", "target-cpu=native",
+    "-C", "target-feature=+avx2,+fma,+bmi2",
+]
