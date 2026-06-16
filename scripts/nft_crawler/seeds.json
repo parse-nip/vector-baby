@@ -1,0 +1,15 @@
+{
+  "collections": [
+    {
+      "slug": "bayc",
+      "name": "Bored Ape Yacht Club",
+      "chain": "ethereum",
+      "contract": "0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d",
+      "supply": 10000,
+      "metadata_source": "ipfs_pattern",
+      "ipfs_cid": "QmeSjSinHpPnmXmspMjwiXyN6zS4E9zccariGR3jxcaWtq",
+      "opensea_slug": "boredapeyachtclub",
+      "hf_repo": "huggingnft/boredapeyachtclub"
+    }
+  ]
+}
