@@ -1,0 +1,43 @@
+# fly.toml — deploy from repo root:
+#   fly launch --no-deploy --name noogle --region sjc --copy-config deploy/fly.toml
+#   fly volumes create noogle_data --region sjc --size 1
+#   fly deploy
+#
+# Custom domain (popped.dev on Cloudflare DNS):
+#   fly certs add noogle.popped.dev
+#   CNAME noogle → noogle.fly.dev (DNS only / grey cloud if apex on CF)
+
+app = "noogle"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
+  build-context = ".."
+
+[env]
+  DATA_DIR = "/data/bayc"
+  PORT_UI = "8090"
+  PORT_VBABY = "8091"
+  BASELINE_TEXT = ""
+
+[http_service]
+  internal_port = 8090
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 20
+    hard_limit = 40
+
+[[vm]]
+  memory = "4gb"
+  cpu_kind = "shared"
+  cpus = 2
+
+[mounts]
+  source = "noogle_data"
+  destination = "/data"
+  initial_size = "2gb"

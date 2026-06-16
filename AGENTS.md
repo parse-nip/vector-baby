@@ -57,9 +57,9 @@ re-ranking. Single binary `vbaby` with subcommands `build`, `bench`, `recall`,
      and forwards the vector to the Rust service.
 - CLIP embeddings are L2-normalized, so cosine ranking == L2 ranking; the
   existing `l2_sq` kernel is reused unchanged (cosine reported as 1 - l2/2).
-- Offline embedding: `scripts/embed_bayc.py` reads HF parquet (BAYC mirror
-  `huggingnft/boredapeyachtclub`), writes `data/bayc/{embeddings.f32,meta.json}`
-  and `images/<token>.jpg`. **Model choice matters for fine attributes**:
+- Offline embedding: `scripts/embed_bayc.py --download` fetches HF parquet
+  (`huggingnft/boredapeyachtclub`) and GPU-encodes all 10k apes, writing
+  `data/bayc/{embeddings.f32,meta.json}` and `images/<token>.jpg`.
   ViT-B-32 misses rare traits like solid-gold fur; ViT-L-14 is much better
   (set `--model ViT-L-14 --pretrained laion2b_s32b_b82k`). The text encoder in
   the serving app MUST use the same model as the image embeddings.
@@ -71,25 +71,6 @@ re-ranking. Single binary `vbaby` with subcommands `build`, `bench`, `recall`,
   sharply improves rare fine-attribute queries (e.g. "golden fur" stops
   returning gold-*chain* apes). Verified not to hurt clean queries.
 - **Latency breakdown** (CPU-only box): the vector search itself is ~2 ms; the
-  CLIP **text encoder dominates** (~60–90 ms for ViT-L-14, ~10 ms for ViT-B-32)
-  and is the only thing near the 100 ms budget — it would be a few ms on a GPU.
+  CLIP **text encoder dominates** (~60–90 ms for ViT-L-14 on CPU, a few ms on GPU).
   `scripts/eval_query.py` renders a montage of top results for fast visual
   iteration; `scripts/find_gold.py` is local pixel-based ground truth.
-
-### NFT crawler (OpenSea → CLIP → index)
-- `scripts/nft_crawler.py` is a real crawler: producer thread paginates OpenSea
-  collections (rate-limited, 429-aware), fetcher threads download CDN images +
-  dedup (by `contract:token` and image sha256), main loop batches CLIP
-  `encode_image` and appends `data/crawl/{embeddings.f32,docs.jsonl,meta.json}`.
-  Resumable via `data/crawl/state.json` + `seen.json` (use `--reset` to start
-  fresh). Discovery is built on OpenSea's index (CDN images) rather than raw
-  chain+IPFS — IPFS gateways rate-limit hard, OpenSea already normalized it.
-- **Gotcha**: OpenSea's WAF returns 403 to the default Python user-agent — the
-  crawler sets a browser-like `User-Agent` on every request. Get a free instant
-  key via `curl -X POST https://api.opensea.io/api/v2/auth/keys` (60 reads/min,
-  30-day expiry); cached to `data/crawl/api_key.json` (gitignored) or set
-  `OPENSEA_API_KEY`. Don't recreate keys (3/hour/IP limit).
-- Serve the crawl: `vbaby serve-nft --dir data/crawl --port 8091` +
-  `nft_search_app.py --docs data/crawl/docs.jsonl --model ViT-B-32 --baseline-text ""`
-  (disable the BAYC-specific baseline for multi-collection corpora; the UI then
-  renders remote CDN images and collection labels from the docstore).

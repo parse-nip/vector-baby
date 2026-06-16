@@ -1,0 +1,29 @@
+# Cloudflare Tunnel ingress for noogle.popped.dev
+#
+# Setup (one-time):
+#   brew install cloudflared
+#   cloudflared tunnel login
+#   cloudflared tunnel create noogle
+#   cloudflared tunnel route dns noogle noogle.popped.dev
+#
+# Replace TUNNEL_ID and credentials path after `tunnel create`:
+#   credentials-file: ~/.cloudflared/<TUNNEL_ID>.json
+#
+# Run (with the app already listening on :8090):
+#   cloudflared tunnel --config deploy/cloudflared.yml run noogle
+#
+# Or use a dashboard-managed tunnel token instead of this file:
+#   cloudflared tunnel --no-autoupdate run --token <TOKEN>
+
+tunnel: noogle
+credentials-file: ~/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  # Public UI + API (Python nft_search_app.py on :8090)
+  - hostname: noogle.popped.dev
+    service: http://127.0.0.1:8090
+    originRequest:
+      connectTimeout: 30s
+      # CLIP text encode can take ~100ms; allow slow mobile clients
+      noHappyEyeballs: false
+  - service: http_status:404

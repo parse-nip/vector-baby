@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Semantic NFT search web app (BAYC POC).
+"""Bored Ape Search web app.
 
 Pipeline per query:
   text  --(CLIP text encoder)-->  vector  --(POST to vector-baby)-->  token ids
@@ -8,7 +8,7 @@ Pipeline per query:
 The vector search itself runs in the Rust `vbaby serve-nft` service; this app
 only does CLIP text encoding, the web UI, and image serving.
 """
-import argparse, json, os, time, urllib.request, html
+import argparse, json, os, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 import torch, open_clip
@@ -16,14 +16,13 @@ import torch, open_clip
 ARGS = None
 MODEL = None
 TOKENIZER = None
-DOCS = None      # optional docstore (list of crawled NFT metadata, row-aligned)
-BASELINE = None  # canonical "a bored ape" embedding, subtracted to isolate the
-                 # distinctive part of a query (helps fine attributes like fur color)
+DEVICE = None
+BASELINE = None
 BASELINE_ALPHA = 0.5
 
 PAGE = """<!DOCTYPE html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1">
-<title>NFT semantic search — vector-baby</title>
+<title>Bored Ape Search — vector-baby</title>
 <style>
 :root{color-scheme:dark}*{box-sizing:border-box}
 body{margin:0;font-family:ui-monospace,Menlo,monospace;background:#0b0e14;color:#e6e6e6;padding:28px}
@@ -35,45 +34,88 @@ button:hover{background:#1d4ed8}
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
 .chip{background:#161b26;border:1px solid #1f2733;color:#9fb4d6;border-radius:999px;padding:6px 12px;font-size:12px;cursor:pointer}
 .chip:hover{background:#1f2733}
-.meta{color:#8a94a6;font-size:13px;margin-bottom:14px;min-height:18px}
+.meta{color:#8a94a6;font-size:13px;margin-bottom:8px;min-height:18px}
 .meta b{color:#7ee787}
+.timing{margin-bottom:14px}
+.timing-labels{display:flex;justify-content:space-between;font-size:11px;color:#8a94a6;margin-bottom:5px;gap:12px;flex-wrap:wrap}
+.timing-labels span{display:flex;align-items:center;gap:5px}
+.dot{width:8px;height:8px;border-radius:2px;display:inline-block}
+.dot.encode{background:#f59e0b}.dot.search{background:#38bdf8}
+.timing-track{display:flex;height:10px;border-radius:6px;overflow:hidden;background:#161b26;border:1px solid #1f2733}
+.timing-seg{height:100%;transition:width .35s ease}
+.timing-seg.encode{background:linear-gradient(90deg,#d97706,#fbbf24)}
+.timing-seg.search{background:linear-gradient(90deg,#0284c7,#38bdf8)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
 .card{background:#121722;border:1px solid #1f2733;border-radius:12px;overflow:hidden}
 .card img{width:100%;display:block;aspect-ratio:1;object-fit:cover;background:#0b0e14}
 .card .info{padding:8px 10px;font-size:12px;display:flex;justify-content:space-between}
 .card .score{color:#7ee787}
 </style></head><body>
-<h1>NFT semantic search</h1>
-<div class=sub>type a concept &middot; CLIP text&rarr;image &middot; neural search over a freshly-crawled multi-collection NFT index via vector-baby</div>
+<h1>Bored Ape Search</h1>
+<div class=sub>type a concept &middot; CLIP text&rarr;image &middot; exact neural search over 10,000 BAYC apes via vector-baby</div>
 <div class=bar>
   <input id=q placeholder="golden fur ape" autofocus>
   <button onclick=run()>Search</button>
 </div>
 <div class=chips id=chips></div>
 <div class=meta id=meta></div>
+<div class=timing id=timing style=display:none>
+  <div class=timing-labels>
+    <span><i class=dot style=background:#fbbf24></i> text encode <b id=lab-enc>—</b></span>
+    <span><i class=dot style=background:#38bdf8></i> vector search <b id=lab-srch>—</b></span>
+    <span>total <b id=lab-tot>—</b></span>
+  </div>
+  <div class=timing-track>
+    <div class="timing-seg encode" id=seg-enc></div>
+    <div class="timing-seg search" id=seg-srch></div>
+  </div>
+</div>
 <div class=grid id=grid></div>
 <script>
-const examples=["a cute penguin","pixel art","a girl with pink hair","a robot","laser eyes","a skull","golden fur","a wizard hat","sunglasses","a colorful psychedelic creature","a samurai","a zombie"];
+const examples=["golden fur","laser eyes","party hat","sunglasses","zombie","robot","wizard hat","diamond grill","crown","blue fur","smoking a cigar","cyborg"];
 const chips=document.getElementById('chips');
 examples.forEach(e=>{const c=document.createElement('span');c.className='chip';c.textContent=e;c.onclick=()=>{document.getElementById('q').value=e;run()};chips.appendChild(c)});
+
+function setTiming(d){
+  const enc=d.encode_ms, srch=d.search_ms, tot=d.total_ms;
+  const encPct=Math.max(0.4,enc/tot*100), srchPct=Math.max(0.4,srch/tot*100);
+  document.getElementById('meta').innerHTML=`"${d.query}" &mdash; <b>${tot.toFixed(1)} ms</b> total (text encode ${enc.toFixed(1)} ms + vector search ${srch.toFixed(2)} ms over ${d.n.toLocaleString()} apes)`;
+  document.getElementById('timing').style.display='block';
+  document.getElementById('lab-enc').textContent=enc.toFixed(1)+' ms ('+encPct.toFixed(0)+'%)';
+  document.getElementById('lab-srch').textContent=srch.toFixed(2)+' ms ('+srchPct.toFixed(0)+'%)';
+  document.getElementById('lab-tot').textContent=tot.toFixed(1)+' ms';
+  document.getElementById('seg-enc').style.width=encPct+'%';
+  document.getElementById('seg-srch').style.width=srchPct+'%';
+}
+
 async function run(){
   const q=document.getElementById('q').value.trim();if(!q)return;
   document.getElementById('meta').textContent='searching...';
+  document.getElementById('timing').style.display='none';
   const r=await fetch('/search?k=24&q='+encodeURIComponent(q));const d=await r.json();
-  document.getElementById('meta').innerHTML=`"${d.query}" &mdash; <b>${d.total_ms.toFixed(1)} ms</b> total (text encode ${d.encode_ms.toFixed(1)} ms + vector search ${d.search_ms.toFixed(2)} ms over ${d.n.toLocaleString()} NFTs)`;
-  document.getElementById('grid').innerHTML=d.results.map(x=>{
-    const img=x.image||('/img/'+x.token+'.jpg');
-    const label=x.collection?x.collection:('#'+x.token);
-    return `<div class=card><img loading=lazy src="${img}"><div class=info><span title="${label}">${label.length>16?label.slice(0,16)+'…':label}</span><span class=score>${x.score.toFixed(3)}</span></div></div>`;
-  }).join('');
+  setTiming(d);
+  document.getElementById('grid').innerHTML=d.results.map(x=>
+    `<div class=card><img loading=lazy src="/img/${x.token}.jpg"><div class=info><span>#${x.token}</span><span class=score>${x.score.toFixed(3)}</span></div></div>`
+  ).join('');
 }
 document.getElementById('q').addEventListener('keydown',e=>{if(e.key==='Enter')run()});
 </script></body></html>"""
 
 
+def pick_device(requested: str) -> torch.device:
+    if requested != "auto":
+        return torch.device(requested)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
 def _embed(text):
     with torch.no_grad():
-        f = MODEL.encode_text(TOKENIZER([text]))
+        toks = TOKENIZER([text]).to(DEVICE)
+        f = MODEL.encode_text(toks)
         f = f / f.norm(dim=-1, keepdim=True)
     return f[0].cpu().numpy().astype("float32")
 
@@ -130,20 +172,13 @@ class Handler(BaseHTTPRequestHandler):
             vec, enc_ms = encode_text(q)
             sr = vbaby_search(vec, k)
             total = (time.time() - t0) * 1000.0
-            results = sr.get("results", [])
-            if DOCS is not None:
-                for r in results:
-                    doc = DOCS[r["token"]] if r["token"] < len(DOCS) else {}
-                    r["image"] = doc.get("image_url")
-                    r["name"] = doc.get("name")
-                    r["collection"] = doc.get("collection")
             out = {
                 "query": q,
                 "encode_ms": enc_ms,
                 "search_ms": sr.get("latency_ms", 0.0),
                 "total_ms": total,
                 "n": NUM_VECTORS,
-                "results": results,
+                "results": sr.get("results", []),
             }
             return self._send(200, json.dumps(out))
         return self._send(404, b"not found", "text/plain")
@@ -153,22 +188,22 @@ NUM_VECTORS = 0
 
 
 def main():
-    global ARGS, MODEL, TOKENIZER, NUM_VECTORS, BASELINE, DOCS
+    global ARGS, MODEL, TOKENIZER, DEVICE, NUM_VECTORS, BASELINE
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--vbaby-port", type=int, default=8091)
-    ap.add_argument("--images", default="data/bayc/images")
-    ap.add_argument("--model", default="ViT-B-32")
-    ap.add_argument("--pretrained", default="laion2b_s34b_b79k")
-    ap.add_argument("--docs", default="", help="optional docs.jsonl docstore (crawler mode, remote images)")
+    ap.add_argument("--data-dir", default="data/bayc", help="BAYC index dir (images/)")
+    ap.add_argument("--images", default=None, help="thumbnail dir (default: <data-dir>/images)")
+    ap.add_argument("--model", default="ViT-L-14")
+    ap.add_argument("--pretrained", default="laion2b_s32b_b82k")
     ap.add_argument("--baseline-text", default="a bored ape", help="prompt subtracted to isolate fine attributes; empty to disable")
+    ap.add_argument("--device", default="auto", choices=["auto", "cuda", "mps", "cpu"])
     ARGS = ap.parse_args()
-    if ARGS.docs and os.path.isfile(ARGS.docs):
-        DOCS = [json.loads(l) for l in open(ARGS.docs)]
-        print(f"loaded docstore: {len(DOCS)} NFTs")
-    torch.set_num_threads(2)
+    if ARGS.images is None:
+        ARGS.images = os.path.join(ARGS.data_dir, "images")
+    DEVICE = pick_device(ARGS.device)
     MODEL, _, _ = open_clip.create_model_and_transforms(ARGS.model, pretrained=ARGS.pretrained)
-    MODEL.eval()
+    MODEL.eval().to(DEVICE)
     TOKENIZER = open_clip.get_tokenizer(ARGS.model)
     BASELINE = _embed(ARGS.baseline_text) if ARGS.baseline_text else None
     try:
@@ -176,7 +211,7 @@ def main():
         NUM_VECTORS = info.get("n", 0)
     except Exception as e:
         print("warning: could not reach vbaby:", e)
-    print(f"NFT search UI on http://0.0.0.0:{ARGS.port}  (vbaby on {ARGS.vbaby_port}, {NUM_VECTORS} vectors)")
+    print(f"Bored Ape Search on http://0.0.0.0:{ARGS.port}  (vbaby on {ARGS.vbaby_port}, {NUM_VECTORS} vectors, device={DEVICE})")
     ThreadingHTTPServer(("0.0.0.0", ARGS.port), Handler).serve_forever()
 
 
