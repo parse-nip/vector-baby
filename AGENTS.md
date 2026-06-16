@@ -74,3 +74,14 @@ re-ranking. Single binary `vbaby` with subcommands `build`, `bench`, `recall`,
   CLIP **text encoder dominates** (~60–90 ms for ViT-L-14 on CPU, a few ms on GPU).
   `scripts/eval_query.py` renders a montage of top results for fast visual
   iteration; `scripts/find_gold.py` is local pixel-based ground truth.
+
+### NFT crawler (Google-style ingest)
+- **Goal:** discover + fetch NFT metadata/images at scale → feed semantic search.
+- Pipeline: `scripts/nft_crawl.py` (crawl) → `embed_collection.py` (CLIP) →
+  `vbaby serve-nft` + `nft_search_app.py` (search).
+- Crawl state in SQLite (`data/crawl/crawl.db`); raw blobs under
+  `data/crawl/{metadata,images}/`. Export via `nft_crawl.py export` produces
+  `manifest.jsonl` for the embedder.
+- Full architecture: `docs/NFT_CRAWLER.md`.
+- Quick start: `nft_crawl.py init && seed --collection bayc --limit 100 &&
+  crawl --until-empty && export --collection bayc --out data/export/bayc`.
