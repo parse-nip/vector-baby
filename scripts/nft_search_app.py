@@ -8,7 +8,7 @@ Pipeline per query:
 The vector search itself runs in the Rust `vbaby serve-nft` service; this app
 only does CLIP text encoding, the web UI, and image serving.
 """
-import argparse, json, os, time, urllib.request
+import argparse, json, os, time, threading, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 import torch, open_clip
@@ -19,6 +19,7 @@ TOKENIZER = None
 DEVICE = None
 BASELINE = None
 BASELINE_ALPHA = 0.5
+MODEL_READY = threading.Event()
 
 PAGE = """<!DOCTYPE html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width, initial-scale=1">
@@ -155,6 +156,10 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if u.path == "/" or u.path == "/index.html":
             return self._send(200, PAGE, "text/html; charset=utf-8")
+        if u.path == "/health":
+            code = 200 if MODEL_READY.is_set() else 503
+            body = "ok" if code == 200 else "loading"
+            return self._send(code, body, "text/plain")
         if u.path.startswith("/img/"):
             name = os.path.basename(u.path)
             fp = os.path.join(ARGS.images, name)
@@ -168,6 +173,8 @@ class Handler(BaseHTTPRequestHandler):
             k = int(qs.get("k", ["24"])[0])
             if not q:
                 return self._send(400, json.dumps({"error": "empty query"}))
+            if not MODEL_READY.is_set():
+                return self._send(503, json.dumps({"error": "loading model, try again"}))
             t0 = time.time()
             vec, enc_ms = encode_text(q)
             sr = vbaby_search(vec, k)
@@ -187,8 +194,25 @@ class Handler(BaseHTTPRequestHandler):
 NUM_VECTORS = 0
 
 
+def boot_clip():
+    global MODEL, TOKENIZER, DEVICE, NUM_VECTORS, BASELINE
+    try:
+        info = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{ARGS.vbaby_port}/api/info", timeout=30).read())
+        NUM_VECTORS = info.get("n", 0)
+    except Exception as e:
+        print("warning: could not reach vbaby:", e, flush=True)
+    DEVICE = pick_device(ARGS.device)
+    print(f"loading CLIP ({ARGS.model}) on {DEVICE} ...", flush=True)
+    MODEL, _, _ = open_clip.create_model_and_transforms(ARGS.model, pretrained=ARGS.pretrained)
+    MODEL.eval().to(DEVICE)
+    TOKENIZER = open_clip.get_tokenizer(ARGS.model)
+    BASELINE = _embed(ARGS.baseline_text) if ARGS.baseline_text else None
+    MODEL_READY.set()
+    print(f"ready — {NUM_VECTORS} vectors on {DEVICE}", flush=True)
+
+
 def main():
-    global ARGS, MODEL, TOKENIZER, DEVICE, NUM_VECTORS, BASELINE
+    global ARGS
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--vbaby-port", type=int, default=8091)
@@ -201,17 +225,8 @@ def main():
     ARGS = ap.parse_args()
     if ARGS.images is None:
         ARGS.images = os.path.join(ARGS.data_dir, "images")
-    DEVICE = pick_device(ARGS.device)
-    MODEL, _, _ = open_clip.create_model_and_transforms(ARGS.model, pretrained=ARGS.pretrained)
-    MODEL.eval().to(DEVICE)
-    TOKENIZER = open_clip.get_tokenizer(ARGS.model)
-    BASELINE = _embed(ARGS.baseline_text) if ARGS.baseline_text else None
-    try:
-        info = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{ARGS.vbaby_port}/api/info", timeout=10).read())
-        NUM_VECTORS = info.get("n", 0)
-    except Exception as e:
-        print("warning: could not reach vbaby:", e)
-    print(f"Bored Ape Search on http://0.0.0.0:{ARGS.port}  (vbaby on {ARGS.vbaby_port}, {NUM_VECTORS} vectors, device={DEVICE})")
+    threading.Thread(target=boot_clip, daemon=True).start()
+    print(f"Bored Ape Search on http://0.0.0.0:{ARGS.port}  (vbaby on {ARGS.vbaby_port}, CLIP loading in background)", flush=True)
     ThreadingHTTPServer(("0.0.0.0", ARGS.port), Handler).serve_forever()
 
 

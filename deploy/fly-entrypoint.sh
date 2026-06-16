@@ -21,6 +21,7 @@ sleep 1
 exec python3 scripts/nft_search_app.py \
   --port "$PORT_UI" \
   --vbaby-port "$PORT_VBABY" \
+  --data-dir "$DATA_DIR" \
   --images "$IMAGES" \
   --model "$MODEL" \
   --pretrained "$PRETRAINED" \
